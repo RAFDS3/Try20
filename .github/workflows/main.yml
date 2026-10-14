@@ -1,0 +1,73 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find project
+        run: |
+          if ! find . -name settings.gradle.kts -not -path './.git/*' | grep -q .; then
+            Z=$(find . -maxdepth 3 -iname '*.zip' -not -path './.git/*' | head -n1)
+            if [ -n "$Z" ]; then
+              echo "Mengekstrak $Z"
+              mkdir -p _src && unzip -q -o "$Z" -d _src
+            fi
+          fi
+          S=$(find . -name settings.gradle.kts -not -path './.git/*' | head -n1)
+          if [ -z "$S" ]; then
+            echo "::error::settings.gradle.kts TIDAK ditemukan di repo. File proyek belum terunggah."
+            echo "Isi repo:"; ls -la; exit 1
+          fi
+          D=$(dirname "$S")
+          echo "PROJECT_DIR=$D" >> "$GITHUB_ENV"
+          echo "Proyek ditemukan di: $D"
+          ls -la "$D"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install NDK & CMake
+        continue-on-error: true
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle assembleDebug --no-daemon --console=plain
+
+      - name: Rename APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/LocalAI-v2-helio-g99.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LocalAI-debug-apk
+          path: ${{ env.PROJECT_DIR }}/dist/*.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PROJECT_DIR }}/dist/*.apk
